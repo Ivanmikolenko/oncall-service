@@ -22,6 +22,7 @@ spec:
       containers:
         - name: oncall-service
           image: ${IMAGE}
+          imagePullPolicy: Never
           ports:
             - containerPort: 8080
           envFrom:
