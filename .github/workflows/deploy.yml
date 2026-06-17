@@ -1,0 +1,128 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    name: Build image
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.tags }}
+      sha_tag: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=long
+            type=ref,event=branch
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+
+  deploy-dev:
+    name: Deploy → dev
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    environment: dev
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host:     ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key:      ${{ secrets.VM_SSH_KEY }}
+          script: |
+            set -e
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+            echo "${{ secrets.GITHUB_TOKEN }}" | \
+              sudo k3s crictl pull \
+              --auth "$(echo -n "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" | base64)" \
+              ghcr.io/${{ github.repository }}:sha-${{ github.sha }} || true
+
+            export NAMESPACE=dev
+            export IMAGE=ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+            export DB_HOST=${{ secrets.DB_HOST }}
+            export DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+            export REDIS_SENTINEL_HOSTS=${{ secrets.REDIS_SENTINEL_HOSTS }}
+            export NODE_PORT=30080
+
+            cd /opt/oncall-service
+            git pull
+
+            envsubst < k8s/secret.yaml     | sudo kubectl apply -f -
+            envsubst < k8s/deployment.yaml | sudo kubectl apply -f -
+            envsubst < k8s/service.yaml    | sudo kubectl apply -f -
+
+            sudo kubectl rollout status deployment/oncall-service -n dev --timeout=120s
+
+  deploy-prod:
+    name: Deploy → prod
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: prod
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host:     ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key:      ${{ secrets.VM_SSH_KEY }}
+          script: |
+            set -e
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+            export NAMESPACE=prod
+            export IMAGE=ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+            export DB_HOST=${{ secrets.DB_HOST }}
+            export DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+            export REDIS_SENTINEL_HOSTS=${{ secrets.REDIS_SENTINEL_HOSTS }}
+            export NODE_PORT=30081
+
+            cd /opt/oncall-service
+            git pull
+
+            envsubst < k8s/secret.yaml     | sudo kubectl apply -f -
+            envsubst < k8s/deployment.yaml | sudo kubectl apply -f -
+            envsubst < k8s/service.yaml    | sudo kubectl apply -f -
+
+            sudo kubectl rollout status deployment/oncall-service -n prod --timeout=120s

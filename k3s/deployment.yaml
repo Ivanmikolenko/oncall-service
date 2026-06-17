@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oncall-service
+  namespace: ${NAMESPACE}
+  labels:
+    app: oncall-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: oncall-service
+  template:
+    metadata:
+      labels:
+        app: oncall-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "8080"
+        prometheus.io/path:   "/metrics"
+    spec:
+      containers:
+        - name: oncall-service
+          image: ${IMAGE}
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: oncall-secret
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu:    "100m"
+              memory: "128Mi"
+            limits:
+              cpu:    "500m"
+              memory: "256Mi"
