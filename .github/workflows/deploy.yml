@@ -8,7 +8,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build:
@@ -17,10 +16,18 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      image: ${{ steps.image.outputs.name }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set lowercase image name
+        id: image
+        run: |
+          NAME=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "name=$NAME" >> $GITHUB_OUTPUT
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -35,15 +42,14 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+            ${{ steps.image.outputs.name }}:latest
 
   deploy-dev:
     name: Deploy to dev
     needs: build
     runs-on: self-hosted
     if: github.ref == 'refs/heads/develop'
-    environment: dev
 
     steps:
       - name: Checkout
@@ -51,11 +57,11 @@ jobs:
 
       - name: Pull image
         run: |
+          IMAGE="${{ needs.build.outputs.image }}:sha-${{ github.sha }}"
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
             -u ${{ github.actor }} --password-stdin
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
-          docker save ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} \
-            -o /tmp/oncall-image.tar
+          docker pull "$IMAGE"
+          docker save "$IMAGE" -o /tmp/oncall-image.tar
           sudo k3s ctr images import /tmp/oncall-image.tar
           rm /tmp/oncall-image.tar
 
@@ -63,15 +69,13 @@ jobs:
         run: |
           export NAMESPACE=dev
           export NODE_PORT=30080
-          export IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          export IMAGE="${{ needs.build.outputs.image }}:sha-${{ github.sha }}"
           export DB_HOST=10.42.0.1
           export DB_PASSWORD=${{ secrets.DB_PASSWORD }}
           export REDIS_SENTINEL_HOSTS="10.42.0.1:26379,10.42.0.1:26380,10.42.0.1:26381"
-
           envsubst < k3s/secret.yaml     | sudo kubectl apply -f -
           envsubst < k3s/deployment.yaml | sudo kubectl apply -f -
           envsubst < k3s/service.yaml    | sudo kubectl apply -f -
-
           sudo kubectl rollout status deployment/oncall-service -n dev --timeout=120s
 
   deploy-prod:
@@ -79,7 +83,6 @@ jobs:
     needs: build
     runs-on: self-hosted
     if: github.ref == 'refs/heads/main'
-    environment: prod
 
     steps:
       - name: Checkout
@@ -87,11 +90,11 @@ jobs:
 
       - name: Pull image
         run: |
+          IMAGE="${{ needs.build.outputs.image }}:sha-${{ github.sha }}"
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
             -u ${{ github.actor }} --password-stdin
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
-          docker save ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} \
-            -o /tmp/oncall-image.tar
+          docker pull "$IMAGE"
+          docker save "$IMAGE" -o /tmp/oncall-image.tar
           sudo k3s ctr images import /tmp/oncall-image.tar
           rm /tmp/oncall-image.tar
 
@@ -99,13 +102,11 @@ jobs:
         run: |
           export NAMESPACE=prod
           export NODE_PORT=30081
-          export IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          export IMAGE="${{ needs.build.outputs.image }}:sha-${{ github.sha }}"
           export DB_HOST=10.42.0.1
           export DB_PASSWORD=${{ secrets.DB_PASSWORD }}
           export REDIS_SENTINEL_HOSTS="10.42.0.1:26379,10.42.0.1:26380,10.42.0.1:26381"
-
           envsubst < k3s/secret.yaml     | sudo kubectl apply -f -
           envsubst < k3s/deployment.yaml | sudo kubectl apply -f -
           envsubst < k3s/service.yaml    | sudo kubectl apply -f -
-
           sudo kubectl rollout status deployment/oncall-service -n prod --timeout=120s
