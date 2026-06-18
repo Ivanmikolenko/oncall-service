@@ -3,7 +3,7 @@ name: Build and Deploy
 on:
   push:
     branches:
-      - main
+      - master
       - develop
 
 env:
@@ -17,17 +17,17 @@ jobs:
       contents: read
       packages: write
     outputs:
-      image: ${{ steps.vars.outputs.image }}
+      image: ${{ steps.image.outputs.name }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set lowercase image name
-        id: vars
+        id: image
         run: |
-          IMAGE="${{ env.REGISTRY }}/${{ github.repository }}"
-          echo "image=${IMAGE,,}" >> $GITHUB_OUTPUT
+          NAME=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "name=$NAME" >> $GITHUB_OUTPUT
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -42,8 +42,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ steps.vars.outputs.image }}:sha-${{ github.sha }}
-            ${{ steps.vars.outputs.image }}:latest
+            ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+            ${{ steps.image.outputs.name }}:latest
 
   deploy-dev:
     name: Deploy to dev
@@ -55,7 +55,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Pull and import image
+      - name: Pull image
         run: |
           IMAGE="${{ needs.build.outputs.image }}:sha-${{ github.sha }}"
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
@@ -88,7 +88,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Pull and import image
+      - name: Pull image
         run: |
           IMAGE="${{ needs.build.outputs.image }}:sha-${{ github.sha }}"
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
