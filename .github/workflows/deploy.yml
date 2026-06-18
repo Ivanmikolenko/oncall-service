@@ -14,9 +14,6 @@ jobs:
   build:
     name: Build image
     runs-on: ubuntu-latest
-    outputs:
-      image: ${{ steps.meta.outputs.tags }}
-      sha_tag: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
     permissions:
       contents: read
       packages: write
@@ -32,26 +29,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=sha,format=long
-            type=ref,event=branch
-
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
   deploy-dev:
-    name: Deploy → dev
+    name: Deploy to dev
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: github.ref == 'refs/heads/develop'
     environment: dev
 
@@ -59,41 +49,35 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
-        with:
-          host:     ${{ secrets.VM_HOST }}
-          username: ${{ secrets.VM_USER }}
-          key:      ${{ secrets.VM_SSH_KEY }}
-          script: |
-            set -e
-            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+      - name: Pull image
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
+            -u ${{ github.actor }} --password-stdin
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          docker save ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} \
+            -o /tmp/oncall-image.tar
+          sudo k3s ctr images import /tmp/oncall-image.tar
+          rm /tmp/oncall-image.tar
 
-            echo "${{ secrets.GITHUB_TOKEN }}" | \
-              sudo k3s crictl pull \
-              --auth "$(echo -n "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" | base64)" \
-              ghcr.io/${{ github.repository }}:sha-${{ github.sha }} || true
+      - name: Deploy to dev
+        run: |
+          export NAMESPACE=dev
+          export NODE_PORT=30080
+          export IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          export DB_HOST=10.42.0.1
+          export DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+          export REDIS_SENTINEL_HOSTS="10.42.0.1:26379,10.42.0.1:26380,10.42.0.1:26381"
 
-            export NAMESPACE=dev
-            export IMAGE=ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
-            export DB_HOST=${{ secrets.DB_HOST }}
-            export DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-            export REDIS_SENTINEL_HOSTS=${{ secrets.REDIS_SENTINEL_HOSTS }}
-            export NODE_PORT=30080
+          envsubst < k3s/secret.yaml     | sudo kubectl apply -f -
+          envsubst < k3s/deployment.yaml | sudo kubectl apply -f -
+          envsubst < k3s/service.yaml    | sudo kubectl apply -f -
 
-            cd /opt/oncall-service
-            git pull
-
-            envsubst < k8s/secret.yaml     | sudo kubectl apply -f -
-            envsubst < k8s/deployment.yaml | sudo kubectl apply -f -
-            envsubst < k8s/service.yaml    | sudo kubectl apply -f -
-
-            sudo kubectl rollout status deployment/oncall-service -n dev --timeout=120s
+          sudo kubectl rollout status deployment/oncall-service -n dev --timeout=120s
 
   deploy-prod:
-    name: Deploy → prod
+    name: Deploy to prod
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: github.ref == 'refs/heads/main'
     environment: prod
 
@@ -101,28 +85,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
-        with:
-          host:     ${{ secrets.VM_HOST }}
-          username: ${{ secrets.VM_USER }}
-          key:      ${{ secrets.VM_SSH_KEY }}
-          script: |
-            set -e
-            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+      - name: Pull image
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
+            -u ${{ github.actor }} --password-stdin
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          docker save ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} \
+            -o /tmp/oncall-image.tar
+          sudo k3s ctr images import /tmp/oncall-image.tar
+          rm /tmp/oncall-image.tar
 
-            export NAMESPACE=prod
-            export IMAGE=ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
-            export DB_HOST=${{ secrets.DB_HOST }}
-            export DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-            export REDIS_SENTINEL_HOSTS=${{ secrets.REDIS_SENTINEL_HOSTS }}
-            export NODE_PORT=30081
+      - name: Deploy to prod
+        run: |
+          export NAMESPACE=prod
+          export NODE_PORT=30081
+          export IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          export DB_HOST=10.42.0.1
+          export DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+          export REDIS_SENTINEL_HOSTS="10.42.0.1:26379,10.42.0.1:26380,10.42.0.1:26381"
 
-            cd /opt/oncall-service
-            git pull
+          envsubst < k3s/secret.yaml     | sudo kubectl apply -f -
+          envsubst < k3s/deployment.yaml | sudo kubectl apply -f -
+          envsubst < k3s/service.yaml    | sudo kubectl apply -f -
 
-            envsubst < k8s/secret.yaml     | sudo kubectl apply -f -
-            envsubst < k8s/deployment.yaml | sudo kubectl apply -f -
-            envsubst < k8s/service.yaml    | sudo kubectl apply -f -
-
-            sudo kubectl rollout status deployment/oncall-service -n prod --timeout=120s
+          sudo kubectl rollout status deployment/oncall-service -n prod --timeout=120s

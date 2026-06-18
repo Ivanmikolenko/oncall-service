@@ -8,9 +8,9 @@ route:
 receivers:
   - name: 'telegram'
     telegram_configs:
-      - bot_token: 'YOUR_BOT_TOKEN'
-        chat_id: YOUR_CHAT_ID
-        api_url: 'https://api.telegram.org'
+      - bot_token: '8968626966:AAHAubOyVC2zILSCVurwYgFatTTUOULczyg'
+        chat_id: 1116113890
+        message: '{{ range .Alerts }}{{ .Annotations.summary }}: {{ .Annotations.description }}{{ end }}'
 
 inhibit_rules:
   - source_match:

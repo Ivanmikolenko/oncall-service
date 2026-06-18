@@ -9,6 +9,7 @@ services:
       - "9090:9090"
     volumes:
       - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -16,6 +17,17 @@ services:
       - '--web.enable-lifecycle'
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      - monitoring
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: alertmanager
+    restart: unless-stopped
+    ports:
+      - "9093:9093"
+    volumes:
+      - ../monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     networks:
       - monitoring
 
@@ -44,10 +56,12 @@ services:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/rootfs:ro
+      - /var/lib/node_exporter/textfile_collector:/var/lib/node_exporter/textfile_collector:ro
     command:
       - '--path.procfs=/host/proc'
       - '--path.sysfs=/host/sys'
       - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/containers|rootfs/var/lib/docker/overlay2|rootfs/run/docker/netns|rootfs/var/lib/docker/aufs)($$|/)'
+      - '--collector.textfile.directory=/var/lib/node_exporter/textfile_collector'
     networks:
       - monitoring
 
@@ -57,16 +71,12 @@ services:
     restart: unless-stopped
     ports:
       - "9121:9121"
-    environment:
-      - REDIS_ADDR=host.docker.internal:26379
-      - REDIS_MASTER_NAME=mymaster
-      - REDIS_SENTINEL_ADDRS=host.docker.internal:26379,host.docker.internal:26380,host.docker.internal:26381
     command:
-      - '--redis.addr=redis://host.docker.internal:26379'
-      - '--redis.sentinel-master-name=mymaster'
-      - '--redis.sentinel-addresses=host.docker.internal:26379,host.docker.internal:26380,host.docker.internal:26381'
+      - '--redis.addr=redis://host.docker.internal:6379'
     networks:
       - monitoring
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
 volumes:
   prometheus_data:

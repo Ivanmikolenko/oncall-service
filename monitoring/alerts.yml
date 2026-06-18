@@ -1,0 +1,76 @@
+groups:
+  - name: oncall-service.rules
+    rules:
+
+      - alert: RedisMasterDown
+        expr: redis_connected_slaves < 1
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis master недоступен"
+          description: "У Redis мастера нет реплик (connected_slaves={{ $value }}). Возможен failover или потеря мастера."
+
+      - alert: AppPodNotReady
+        expr: |
+          kube_pod_status_ready{namespace=~"dev|prod", condition="true"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Pod {{ $labels.pod }} не Ready"
+          description: "Pod {{ $labels.pod }} в namespace {{ $labels.namespace }} не прошёл readiness probe более 30 секунд."
+
+      - alert: HighCPUUsage
+        expr: |
+          100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100) > 80
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Высокая нагрузка CPU ({{ $value | printf \"%.1f\" }}%)"
+          description: "CPU usage превысил 80% на {{ $labels.instance }} в течение 1 минуты."
+
+      - alert: PostgresDown
+        expr: |
+          probe_success{job="postgres-probe"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL недоступен"
+          description: "Postgres не отвечает более 30 секунд. Приложение перейдёт в режим ошибок."
+
+      - alert: AppDatabaseErrors
+        expr: |
+          increase(app_db_errors_total[2m]) > 5
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Ошибки БД в приложении ({{ $value }} за 2 мин)"
+          description: "Приложение фиксирует ошибки подключения к базе данных."
+
+      - alert: AppHighErrorRate
+        expr: |
+          (
+            sum(rate(app_requests_total{status=~"5.."}[2m]))
+            /
+            sum(rate(app_requests_total[2m]))
+          ) > 0.01
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Высокий error rate приложения ({{ $value | printf \"%.1f%%\" }})"
+          description: "Более 1% запросов возвращают 5xx ошибки за последние 2 минуты."
+
+      - alert: BackupTooOld
+        expr: |
+          (time() - backup_last_success_timestamp_seconds) > 7200
+        for: 0s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Бэкап БД не выполнялся более 2 часов"
+          description: "Последний успешный бэкап был {{ $value | humanizeDuration }} назад."
